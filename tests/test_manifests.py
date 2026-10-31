@@ -58,8 +58,41 @@ TRACKED_FILES = {
 MAX_BYTES = 65536
 
 COMPONENT_KEYS = ("skills", "agents", "commands", "hooks")
-FORBIDDEN_KEY = re.compile(r"(?i)(api[_-]?key|token|password|secret)")
-TOKEN_REF_KEYS = {"bearerTokenEnvVar", "bearer_token_env_var", TOKEN_ENV}
+FORBIDDEN_KEY = re.compile(r"(?i)(api[_-]?key|token|password|secret|bearer|cookie|credential)")
+TOKEN_REF_KEYS = {"bearerTokenEnvVar", "bearer_token_env_var"}
+# Описание плагинной переменной Cursor: только метаданные, без значения.
+TOKEN_VARIABLE_KEYS = {"type", "title", "description"}
+
+
+def secret_problems(rel: str, value: object, path: str = "") -> list[str]:
+    """Нарушения правила «токен только ссылкой на ROSSTAT_MCP_TOKEN»."""
+    problems: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            here = f"{path}.{key}" if path else key
+            if key in TOKEN_REF_KEYS:
+                if child != TOKEN_ENV:
+                    problems.append(f"{rel}: {here} must name {TOKEN_ENV}")
+            elif key == "headers":
+                if child != {"Authorization": BEARER}:
+                    problems.append(f"{rel}: {here} must be exactly Authorization: {BEARER}")
+            elif key == TOKEN_ENV:
+                allowed = rel == ".cursor-plugin/plugin.json" and here == f"variables.properties.{TOKEN_ENV}"
+                if not allowed or not isinstance(child, dict) or not set(child) <= TOKEN_VARIABLE_KEYS:
+                    problems.append(f"{rel}: {here} may only describe the Cursor variable")
+            elif FORBIDDEN_KEY.search(key):
+                problems.append(f"{rel}: forbidden key {here!r}")
+            else:
+                problems.extend(secret_problems(rel, child, here))
+    elif isinstance(value, list):
+        for i, child in enumerate(value):
+            problems.extend(secret_problems(rel, child, f"{path}.{i}"))
+    elif isinstance(value, str):
+        if re.match(r"(?i)(bearer|token|basic)\s", value):
+            problems.append(f"{rel}: {path} holds a literal credential")
+        if value.startswith(("http://", "https://")) and "?" in value:
+            problems.append(f"{rel}: {path} URL must not carry a query string")
+    return problems
 
 
 def load(rel: str) -> dict:
@@ -159,22 +192,31 @@ class ManifestTest(unittest.TestCase):
             if ".git" in path.parts:
                 continue
             rel = path.relative_to(ROOT).as_posix()
-            self._walk(rel, json.loads(path.read_text(encoding="utf-8")))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            with self.subTest(file=rel):
+                self.assertEqual(secret_problems(rel, data), [])
 
-    def _walk(self, rel: str, value: object) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                if key in TOKEN_REF_KEYS:
-                    if key != TOKEN_ENV:
-                        self.assertEqual(child, TOKEN_ENV, f"{rel}: {key} must name {TOKEN_ENV}")
-                    continue
-                self.assertIsNone(FORBIDDEN_KEY.search(key), f"{rel}: forbidden key {key!r}")
-                self._walk(rel, child)
-        elif isinstance(value, list):
-            for child in value:
-                self._walk(rel, child)
-        elif isinstance(value, str) and value.startswith("Bearer "):
-            self.assertEqual(value, BEARER, f"{rel}: literal bearer value")
+    def test_secret_guard_rejects_literal_tokens(self) -> None:
+        def mutated(rel: str, path: str, value: object) -> dict:
+            data = load(rel)
+            parts = path.split(".")
+            node = data
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = value
+            return data
+
+        cases = {
+            "variable default": (".cursor-plugin/plugin.json", "variables.properties.ROSSTAT_MCP_TOKEN.default", "FAKEVALUE123"),
+            "env value": ("qwen-extension.json", "mcpServers.rosstat-staging.env", {TOKEN_ENV: "FAKEVALUE123"}),
+            "extra header": ("qwen-extension.json", "mcpServers.rosstat-staging.headers.X-Auth", "bearer FAKEVALUE123"),
+            "token scheme": (".claude-plugin/plugin.json", "mcpServers.rosstat-staging.headers.Authorization", "Token abc"),
+            "query token": ("kimi.plugin.json", "mcpServers.rosstat-staging.url", MCP_URL + "?token=abc"),
+            "credential key": ("kimi.plugin.json", "mcpServers.rosstat-staging.credential", "abc"),
+        }
+        for name, (rel, path, value) in cases.items():
+            with self.subTest(case=name):
+                self.assertTrue(secret_problems(rel, mutated(rel, path, value)), f"{name} not detected")
 
     def test_marketplace_sources(self) -> None:
         self.assertEqual(load(".claude-plugin/marketplace.json")["plugins"][0]["source"], "./")
