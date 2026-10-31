@@ -1,0 +1,32 @@
+{
+  "name": "rosstat-mcp",
+  "version": "0.3.0",
+  "description": "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) on the clickhouse-import-rosstat staging server.",
+  "author": {
+    "name": "kmlebedev",
+    "url": "https://github.com/kmlebedev"
+  },
+  "homepage": "https://github.com/kmlebedev/rosstat-mcp",
+  "repository": "https://github.com/kmlebedev/rosstat-mcp",
+  "license": "MIT",
+  "keywords": [
+    "rosstat",
+    "cbr",
+    "clickhouse",
+    "mcp",
+    "macro"
+  ],
+  "mcpServers": {
+    "rosstat-staging": {
+      "url": "https://mcp.selfinvesting.ru:8443/mcp",
+      "bearerTokenEnvVar": "ROSSTAT_MCP_TOKEN"
+    }
+  },
+  "interface": {
+    "displayName": "Rosstat MCP",
+    "shortDescription": "Read-only MCP to Rosstat/CBR data marts",
+    "longDescription": "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) on the clickhouse-import-rosstat staging server.",
+    "developerName": "kmlebedev",
+    "websiteURL": "https://github.com/kmlebedev/rosstat-mcp"
+  }
+}
