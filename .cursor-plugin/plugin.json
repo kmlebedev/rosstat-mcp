@@ -1,0 +1,41 @@
+{
+  "name": "rosstat-mcp",
+  "displayName": "Rosstat MCP",
+  "version": "0.3.0",
+  "description": "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) on the clickhouse-import-rosstat staging server.",
+  "author": {
+    "name": "kmlebedev"
+  },
+  "homepage": "https://github.com/kmlebedev/rosstat-mcp",
+  "repository": "https://github.com/kmlebedev/rosstat-mcp",
+  "license": "MIT",
+  "keywords": [
+    "rosstat",
+    "cbr",
+    "clickhouse",
+    "mcp",
+    "macro"
+  ],
+  "category": "data",
+  "tags": [
+    "rosstat",
+    "cbr",
+    "clickhouse",
+    "mcp",
+    "macro"
+  ],
+  "mcpServers": "./.cursor-plugin/mcp.json",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "ROSSTAT_MCP_TOKEN": {
+        "type": "string",
+        "title": "Rosstat MCP access token",
+        "description": "Bearer token for the read-only staging MCP (v_* views). Issued by the repository owner."
+      }
+    },
+    "required": [
+      "ROSSTAT_MCP_TOKEN"
+    ]
+  }
+}
