@@ -1,8 +1,8 @@
 {
   "name": "rosstat-mcp",
   "displayName": "Rosstat MCP",
-  "version": "0.3.0",
-  "description": "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) on the clickhouse-import-rosstat staging server.",
+  "version": "0.4.0",
+  "description": "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) on the clickhouse-import-rosstat staging server, plus the rosstat-sql skill for writing efficient ClickHouse queries against them.",
   "author": {
     "name": "kmlebedev",
     "url": "https://github.com/kmlebedev"
