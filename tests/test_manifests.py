@@ -278,6 +278,18 @@ class ManifestTest(unittest.TestCase):
                 with self.subTest(table=table):
                     self.assertTrue(table.startswith(("v_", "system.")), f"{table} is not a v_* view")
 
+    def test_skill_rules_from_review(self) -> None:
+        text = (ROOT / SKILL_REL).read_text(encoding="utf-8")
+        body = [l for l in text.split("---\n", 2)[2].splitlines() if l.strip() and not l.startswith("#")]
+        self.assertIn("Answer the user in Russian", body[0])
+        self.assertNotRegex(text, r"toStartOfWeek\(\w+\)", "weeks must start on Monday")
+        self.assertNotIn("any(value)", text, "dedupe must be deterministic")
+        self.assertNotRegex(text, r"\d\.\d{4,}", "no literal data values the agent could quote")
+        self.assertIn("toDateTime(", text, "DateTime literals need an explicit zone")
+        yoy = next(b for b in SQL_BLOCK.findall(text) if "log(" in b)
+        self.assertIn("PARTITION BY series", yoy)
+        self.assertIn("dateDiff('month'", yoy, "y/y window must prove 12 consecutive months")
+
     def test_skill_tables_parser(self) -> None:
         sql = "SELECT 1 FROM v_a JOIN system.columns c ON 1 WHERE x IN (SELECT y FROM v_point_in_time_asof(as_of='2024-01-01'))"
         self.assertEqual(skill_tables(sql), {"v_a", "system.columns", "v_point_in_time_asof"})
