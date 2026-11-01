@@ -19,12 +19,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 NAME = "rosstat-mcp"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 LONG = (
     "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) "
-    "on the clickhouse-import-rosstat staging server."
+    "on the clickhouse-import-rosstat staging server, plus the rosstat-sql skill for writing "
+    "efficient ClickHouse queries against them."
 )
-SHORT = "Read-only MCP to Rosstat/CBR data marts"
+SHORT = "Read-only MCP to Rosstat/CBR data marts + SQL skill"
 
 MCP_NAME = "rosstat-staging"
 MCP_URL = "https://mcp.selfinvesting.ru:8443/mcp"
@@ -54,10 +55,26 @@ TRACKED_FILES = {
     ".gitignore",
     "tests/test_manifests.py",
     ".github/workflows/check.yml",
+    "skills/rosstat-sql/SKILL.md",
+    "skills/rosstat-sql/references/templates.md",
+    "skills/rosstat-sql/references/point-in-time.md",
 }
 MAX_BYTES = 65536
 
-COMPONENT_KEYS = ("skills", "agents", "commands", "hooks")
+SKILL_REL = "skills/rosstat-sql/SKILL.md"
+SKILL_REFS = ("skills/rosstat-sql/references/templates.md", "skills/rosstat-sql/references/point-in-time.md")
+SKILL_MAX_BYTES = 6144
+# SKILL.md грузится при каждом срабатывании; references — только по ссылке, но и их держим компактными.
+SKILL_TOTAL_MAX_BYTES = 10240
+SKILL_DESCRIPTION_MAX = 300
+SQL_BLOCK = re.compile(r"```sql\n(.*?)```", re.S)
+SQL_SOURCE = re.compile(r"(?i)\b(?:from|join)\s+([A-Za-z_][\w.]*)")
+LITERAL_SECRET = re.compile(r"(?i)(bearer\s+(?!\$\{)\S+|password\s*=)")
+
+COMPONENT_KEYS = ("agents", "commands", "hooks")
+# Claude Code, Cursor и Qwen подхватывают skills/ сами; явное поле — только где без него не найдут.
+SKILLS_DECLARED = {".codex-plugin/plugin.json", "kimi.plugin.json"}
+SKILLS_PATH = "./skills/"
 FORBIDDEN_KEY = re.compile(r"(?i)(api[_-]?key|token|password|secret|bearer|cookie|credential)")
 TOKEN_REF_KEYS = {"bearerTokenEnvVar", "bearer_token_env_var"}
 # Описание плагинной переменной Cursor: только метаданные, без значения.
@@ -93,6 +110,27 @@ def secret_problems(rel: str, value: object, path: str = "") -> list[str]:
         if value.startswith(("http://", "https://")) and "?" in value:
             problems.append(f"{rel}: {path} URL must not carry a query string")
     return problems
+
+
+def skill_text() -> str:
+    return "\n".join((ROOT / rel).read_text(encoding="utf-8") for rel in (SKILL_REL, *SKILL_REFS))
+
+
+def skill_tables(sql: str) -> set[str]:
+    """Имена таблиц после FROM/JOIN; табличная функция даёт своё имя без аргументов."""
+    return set(SQL_SOURCE.findall(sql))
+
+
+def frontmatter(text: str) -> dict[str, str]:
+    parts = text.split("---\n", 2)
+    if len(parts) < 3 or parts[0]:
+        raise AssertionError("SKILL.md must start with a --- frontmatter block")
+    fields = {}
+    for line in parts[1].splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            fields[key.strip()] = value.strip()
+    return fields
 
 
 def load(rel: str) -> dict:
@@ -153,12 +191,17 @@ class ManifestTest(unittest.TestCase):
             with self.subTest(file=rel):
                 self.assertEqual(len(load(rel)["plugins"]), 1)
 
-    def test_no_component_fields(self) -> None:
+    def test_components(self) -> None:
         for rel in PLUGIN_MANIFESTS:
             data = load(rel)
             for key in COMPONENT_KEYS:
                 with self.subTest(file=rel, key=key):
                     self.assertNotIn(key, data)
+            with self.subTest(file=rel, key="skills"):
+                if rel in SKILLS_DECLARED:
+                    self.assertEqual(data.get("skills"), SKILLS_PATH)
+                else:
+                    self.assertNotIn("skills", data)
 
     def test_mcp_server_contract(self) -> None:
         for rel in PLUGIN_MANIFESTS:
@@ -225,6 +268,50 @@ class ManifestTest(unittest.TestCase):
             load(".agents/plugins/marketplace.json")["plugins"][0]["source"],
             {"source": "url", "url": REPO_GIT, "ref": "main"},
         )
+
+    def test_skill(self) -> None:
+        skills = sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir())
+        self.assertEqual(skills, ["rosstat-sql"])
+        files = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "skills").rglob("*") if p.is_file())
+        self.assertEqual(files, sorted((SKILL_REL, *SKILL_REFS)))
+        path = ROOT / SKILL_REL
+        self.assertLessEqual(path.stat().st_size, SKILL_MAX_BYTES)
+        self.assertLessEqual(sum((ROOT / rel).stat().st_size for rel in files), SKILL_TOTAL_MAX_BYTES)
+        text = path.read_text(encoding="utf-8")
+        meta = frontmatter(text)
+        self.assertEqual(meta.get("name"), "rosstat-sql")
+        self.assertTrue(0 < len(meta.get("description", "")) <= SKILL_DESCRIPTION_MAX)
+        self.assertIn("Russian", text)
+        for ref in SKILL_REFS:
+            with self.subTest(link=ref):
+                self.assertIn(f"]({ref.removeprefix('skills/rosstat-sql/')})", text, "SKILL.md must link every reference")
+        whole = skill_text()
+        self.assertEqual(LITERAL_SECRET.findall(whole), [])
+        blocks = SQL_BLOCK.findall(whole)
+        self.assertTrue(blocks, "skill must carry SQL templates")
+        for sql in blocks:
+            for table in skill_tables(sql):
+                with self.subTest(table=table):
+                    self.assertTrue(table.startswith(("v_", "system.")), f"{table} is not a v_* view")
+
+    def test_skill_rules_from_review(self) -> None:
+        text = skill_text()
+        core = (ROOT / SKILL_REL).read_text(encoding="utf-8")
+        self.assertIn("create_table_query", core, "source -> view lookup must be in the core workflow")
+        body = [l for l in core.split("---\n", 2)[2].splitlines() if l.strip() and not l.startswith("#")]
+        self.assertIn("Answer the user in Russian", body[0])
+        self.assertNotRegex(text, r"toStartOfWeek\(\w+\)", "weeks must start on Monday")
+        self.assertNotIn("any(value)", text, "dedupe must be deterministic")
+        self.assertNotRegex(text, r"\d\.\d{4,}", "no literal data values the agent could quote")
+        self.assertIn("toDateTime(", text, "DateTime literals need an explicit zone")
+        yoy = next(b for b in SQL_BLOCK.findall(text) if "log(" in b)
+        self.assertIn("PARTITION BY series", yoy)
+        self.assertIn("dateDiff('month'", yoy, "y/y window must prove 12 consecutive months")
+
+    def test_skill_tables_parser(self) -> None:
+        sql = "SELECT 1 FROM v_a JOIN system.columns c ON 1 WHERE x IN (SELECT y FROM v_point_in_time_asof(as_of='2024-01-01'))"
+        self.assertEqual(skill_tables(sql), {"v_a", "system.columns", "v_point_in_time_asof"})
+        self.assertEqual(skill_tables("SELECT 1 FROM macro_series"), {"macro_series"})
 
     def test_tracked_files_allowlist(self) -> None:
         out = subprocess.run(
