@@ -55,8 +55,16 @@ TRACKED_FILES = {
     ".gitignore",
     "tests/test_manifests.py",
     ".github/workflows/check.yml",
+    "skills/rosstat-sql/SKILL.md",
 }
 MAX_BYTES = 65536
+
+SKILL_REL = "skills/rosstat-sql/SKILL.md"
+SKILL_MAX_BYTES = 6144
+SKILL_DESCRIPTION_MAX = 300
+SQL_BLOCK = re.compile(r"```sql\n(.*?)```", re.S)
+SQL_SOURCE = re.compile(r"(?i)\b(?:from|join)\s+([A-Za-z_][\w.]*)")
+LITERAL_SECRET = re.compile(r"(?i)(bearer\s+(?!\$\{)\S+|password\s*=)")
 
 COMPONENT_KEYS = ("agents", "commands", "hooks")
 # Claude Code, Cursor и Qwen подхватывают skills/ сами; явное поле — только где без него не найдут.
@@ -97,6 +105,23 @@ def secret_problems(rel: str, value: object, path: str = "") -> list[str]:
         if value.startswith(("http://", "https://")) and "?" in value:
             problems.append(f"{rel}: {path} URL must not carry a query string")
     return problems
+
+
+def skill_tables(sql: str) -> set[str]:
+    """Имена таблиц после FROM/JOIN; табличная функция даёт своё имя без аргументов."""
+    return set(SQL_SOURCE.findall(sql))
+
+
+def frontmatter(text: str) -> dict[str, str]:
+    parts = text.split("---\n", 2)
+    if len(parts) < 3 or parts[0]:
+        raise AssertionError("SKILL.md must start with a --- frontmatter block")
+    fields = {}
+    for line in parts[1].splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            fields[key.strip()] = value.strip()
+    return fields
 
 
 def load(rel: str) -> dict:
@@ -234,6 +259,29 @@ class ManifestTest(unittest.TestCase):
             load(".agents/plugins/marketplace.json")["plugins"][0]["source"],
             {"source": "url", "url": REPO_GIT, "ref": "main"},
         )
+
+    def test_skill(self) -> None:
+        skills = sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir())
+        self.assertEqual(skills, ["rosstat-sql"])
+        path = ROOT / SKILL_REL
+        self.assertLessEqual(path.stat().st_size, SKILL_MAX_BYTES)
+        text = path.read_text(encoding="utf-8")
+        meta = frontmatter(text)
+        self.assertEqual(meta.get("name"), "rosstat-sql")
+        self.assertTrue(0 < len(meta.get("description", "")) <= SKILL_DESCRIPTION_MAX)
+        self.assertIn("Russian", text)
+        self.assertEqual(LITERAL_SECRET.findall(text), [])
+        blocks = SQL_BLOCK.findall(text)
+        self.assertTrue(blocks, "skill must carry SQL templates")
+        for sql in blocks:
+            for table in skill_tables(sql):
+                with self.subTest(table=table):
+                    self.assertTrue(table.startswith(("v_", "system.")), f"{table} is not a v_* view")
+
+    def test_skill_tables_parser(self) -> None:
+        sql = "SELECT 1 FROM v_a JOIN system.columns c ON 1 WHERE x IN (SELECT y FROM v_point_in_time_asof(as_of='2024-01-01'))"
+        self.assertEqual(skill_tables(sql), {"v_a", "system.columns", "v_point_in_time_asof"})
+        self.assertEqual(skill_tables("SELECT 1 FROM macro_series"), {"macro_series"})
 
     def test_tracked_files_allowlist(self) -> None:
         out = subprocess.run(
