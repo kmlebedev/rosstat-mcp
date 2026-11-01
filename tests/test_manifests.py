@@ -56,11 +56,16 @@ TRACKED_FILES = {
     "tests/test_manifests.py",
     ".github/workflows/check.yml",
     "skills/rosstat-sql/SKILL.md",
+    "skills/rosstat-sql/references/templates.md",
+    "skills/rosstat-sql/references/point-in-time.md",
 }
 MAX_BYTES = 65536
 
 SKILL_REL = "skills/rosstat-sql/SKILL.md"
+SKILL_REFS = ("skills/rosstat-sql/references/templates.md", "skills/rosstat-sql/references/point-in-time.md")
 SKILL_MAX_BYTES = 6144
+# SKILL.md грузится при каждом срабатывании; references — только по ссылке, но и их держим компактными.
+SKILL_TOTAL_MAX_BYTES = 10240
 SKILL_DESCRIPTION_MAX = 300
 SQL_BLOCK = re.compile(r"```sql\n(.*?)```", re.S)
 SQL_SOURCE = re.compile(r"(?i)\b(?:from|join)\s+([A-Za-z_][\w.]*)")
@@ -105,6 +110,10 @@ def secret_problems(rel: str, value: object, path: str = "") -> list[str]:
         if value.startswith(("http://", "https://")) and "?" in value:
             problems.append(f"{rel}: {path} URL must not carry a query string")
     return problems
+
+
+def skill_text() -> str:
+    return "\n".join((ROOT / rel).read_text(encoding="utf-8") for rel in (SKILL_REL, *SKILL_REFS))
 
 
 def skill_tables(sql: str) -> set[str]:
@@ -263,15 +272,22 @@ class ManifestTest(unittest.TestCase):
     def test_skill(self) -> None:
         skills = sorted(p.name for p in (ROOT / "skills").iterdir() if p.is_dir())
         self.assertEqual(skills, ["rosstat-sql"])
+        files = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "skills").rglob("*") if p.is_file())
+        self.assertEqual(files, sorted((SKILL_REL, *SKILL_REFS)))
         path = ROOT / SKILL_REL
         self.assertLessEqual(path.stat().st_size, SKILL_MAX_BYTES)
+        self.assertLessEqual(sum((ROOT / rel).stat().st_size for rel in files), SKILL_TOTAL_MAX_BYTES)
         text = path.read_text(encoding="utf-8")
         meta = frontmatter(text)
         self.assertEqual(meta.get("name"), "rosstat-sql")
         self.assertTrue(0 < len(meta.get("description", "")) <= SKILL_DESCRIPTION_MAX)
         self.assertIn("Russian", text)
-        self.assertEqual(LITERAL_SECRET.findall(text), [])
-        blocks = SQL_BLOCK.findall(text)
+        for ref in SKILL_REFS:
+            with self.subTest(link=ref):
+                self.assertIn(f"]({ref.removeprefix('skills/rosstat-sql/')})", text, "SKILL.md must link every reference")
+        whole = skill_text()
+        self.assertEqual(LITERAL_SECRET.findall(whole), [])
+        blocks = SQL_BLOCK.findall(whole)
         self.assertTrue(blocks, "skill must carry SQL templates")
         for sql in blocks:
             for table in skill_tables(sql):
@@ -279,8 +295,10 @@ class ManifestTest(unittest.TestCase):
                     self.assertTrue(table.startswith(("v_", "system.")), f"{table} is not a v_* view")
 
     def test_skill_rules_from_review(self) -> None:
-        text = (ROOT / SKILL_REL).read_text(encoding="utf-8")
-        body = [l for l in text.split("---\n", 2)[2].splitlines() if l.strip() and not l.startswith("#")]
+        text = skill_text()
+        core = (ROOT / SKILL_REL).read_text(encoding="utf-8")
+        self.assertIn("create_table_query", core, "source -> view lookup must be in the core workflow")
+        body = [l for l in core.split("---\n", 2)[2].splitlines() if l.strip() and not l.startswith("#")]
         self.assertIn("Answer the user in Russian", body[0])
         self.assertNotRegex(text, r"toStartOfWeek\(\w+\)", "weeks must start on Monday")
         self.assertNotIn("any(value)", text, "dedupe must be deterministic")
