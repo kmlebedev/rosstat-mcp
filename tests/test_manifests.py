@@ -19,12 +19,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 NAME = "rosstat-mcp"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 LONG = (
     "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) "
-    "on the clickhouse-import-rosstat staging server."
+    "on the clickhouse-import-rosstat staging server, plus the rosstat-sql skill for writing "
+    "efficient ClickHouse queries against them."
 )
-SHORT = "Read-only MCP to Rosstat/CBR data marts"
+SHORT = "Read-only MCP to Rosstat/CBR data marts + SQL skill"
 
 MCP_NAME = "rosstat-staging"
 MCP_URL = "https://mcp.selfinvesting.ru:8443/mcp"
@@ -57,7 +58,10 @@ TRACKED_FILES = {
 }
 MAX_BYTES = 65536
 
-COMPONENT_KEYS = ("skills", "agents", "commands", "hooks")
+COMPONENT_KEYS = ("agents", "commands", "hooks")
+# Claude Code, Cursor и Qwen подхватывают skills/ сами; явное поле — только где без него не найдут.
+SKILLS_DECLARED = {".codex-plugin/plugin.json", "kimi.plugin.json"}
+SKILLS_PATH = "./skills/"
 FORBIDDEN_KEY = re.compile(r"(?i)(api[_-]?key|token|password|secret|bearer|cookie|credential)")
 TOKEN_REF_KEYS = {"bearerTokenEnvVar", "bearer_token_env_var"}
 # Описание плагинной переменной Cursor: только метаданные, без значения.
@@ -153,12 +157,17 @@ class ManifestTest(unittest.TestCase):
             with self.subTest(file=rel):
                 self.assertEqual(len(load(rel)["plugins"]), 1)
 
-    def test_no_component_fields(self) -> None:
+    def test_components(self) -> None:
         for rel in PLUGIN_MANIFESTS:
             data = load(rel)
             for key in COMPONENT_KEYS:
                 with self.subTest(file=rel, key=key):
                     self.assertNotIn(key, data)
+            with self.subTest(file=rel, key="skills"):
+                if rel in SKILLS_DECLARED:
+                    self.assertEqual(data.get("skills"), SKILLS_PATH)
+                else:
+                    self.assertNotIn("skills", data)
 
     def test_mcp_server_contract(self) -> None:
         for rel in PLUGIN_MANIFESTS:
