@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Rosstat MCP",
+    "description": "Connect the read-only rosstat-staging MCP server for Rosstat/CBR data marts and load the bundled rosstat-sql skill."
+  }
+}

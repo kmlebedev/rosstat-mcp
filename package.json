@@ -1,0 +1,41 @@
+{
+  "name": "rosstat-mcp",
+  "version": "0.5.0",
+  "description": "Read-only MCP to Rosstat/CBR data marts + SQL skill",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "skills"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "author": {
+    "name": "kmlebedev",
+    "url": "https://github.com/kmlebedev"
+  },
+  "homepage": "https://github.com/kmlebedev/rosstat-mcp",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kmlebedev/rosstat-mcp.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "rosstat",
+    "cbr",
+    "clickhouse",
+    "mcp",
+    "macro"
+  ]
+}
