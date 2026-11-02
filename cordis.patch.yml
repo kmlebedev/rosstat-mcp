@@ -1,0 +1,23 @@
+# DeepSeek Harness bundle for rosstat-mcp.
+#
+# Two rows: the rosstat-staging MCP connection, and this package's host half,
+# which registers the bundled rosstat-sql skill on ctx.skills.
+#
+# DeepSeek Harness 0.2.x has no MCP OAuth support, so the MCP row authenticates
+# the way the 0.4.x client manifests did: with the ROSSTAT_MCP_TOKEN environment
+# variable. The token is never stored here; the Loader interpolates it when the
+# row activates. When DSH learns MCP OAuth, replace the `headers` block (see
+# README, "DeepSeek Harness").
+- insert:
+    - id: mcp-rosstat-staging
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: rosstat-staging
+        transport: streamable-http
+        url: 'https://mcp.selfinvesting.ru:8443/mcp'
+        headers:
+          Authorization: !!js '`Bearer ${process.env.ROSSTAT_MCP_TOKEN}`'
+        failOnStartupError: true
+
+    - id: skill-rosstat-sql
+      name: 'rosstat-mcp'

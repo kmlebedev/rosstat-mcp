@@ -5,16 +5,24 @@
 
     python3 -m unittest discover -s tests -v
 
-Только стандартная библиотека; сеть не нужна.
+Только стандартная библиотека; сеть не нужна. Структурная проверка
+YAML-патча DeepSeek Harness выполняется при установленном PyYAML (его ставит CI).
 """
 
 from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
+
+try:  # PyYAML нужен только для структурной проверки bundle-патча DSH; CI его ставит.
+    import yaml
+except ImportError:  # pragma: no cover - локальный запуск без dev-зависимостей
+    yaml = None
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -45,10 +53,27 @@ MARKETPLACES = (
     ".cursor-plugin/marketplace.json",
 )
 MCP_CONFIGS = (".codex-plugin/mcp.json", ".cursor-plugin/mcp.json")
+
+# Bundle для DeepSeek Harness: npm-пакет в корне репозитория, который DSH
+# ставит как зависимость профиля (`github:kmlebedev/rosstat-mcp`). Патч
+# добавляет MCP-строку и host-плагин, регистрирующий скил rosstat-sql.
+# DSH 0.2.x не умеет MCP OAuth, поэтому строка авторизуется bearer-токеном
+# из ROSSTAT_MCP_TOKEN (как манифесты 0.4.x), а не через OAuth.
+DSH_PACKAGE = "package.json"
+DSH_PATCH = "cordis.patch.yml"
+DSH_PLUGIN = "index.js"
+DSH_ICON = "icon.svg"
+DSH_LOCALES = ("locale/en.json", "locale/ru.json")
+DSH_FILES = (DSH_PACKAGE, DSH_PATCH, DSH_PLUGIN, DSH_ICON, *DSH_LOCALES)
+DSH_TOKEN_ENV = "ROSSTAT_MCP_TOKEN"
+DSH_HEADER = "`Bearer ${process.env." + DSH_TOKEN_ENV + "}`"
+DSH_ROW_IDS = {"mcp-rosstat-staging", "skill-rosstat-sql"}
+
 TRACKED_FILES = {
     *PLUGIN_MANIFESTS,
     *MARKETPLACES,
     *MCP_CONFIGS,
+    *DSH_FILES,
     "README.md",
     "LICENSE",
     ".gitignore",
@@ -61,7 +86,9 @@ TRACKED_FILES = {
     "skills/rosstat-sql/references/point-in-time.md",
     "wiki/rosstat-mcp.md",
 }
-MAX_BYTES = 65536
+# Клиентские манифесты и скил занимают ~60 КБ; bundle DSH добавляет host half,
+# локали и иконку, поэтому бюджет расширен до 80 КБ.
+MAX_BYTES = 81920
 
 SKILL_REL = "skills/rosstat-sql/SKILL.md"
 SKILL_REFS = ("skills/rosstat-sql/references/templates.md", "skills/rosstat-sql/references/point-in-time.md")
@@ -320,6 +347,128 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(tracked, TRACKED_FILES)
         size = sum((ROOT / rel).stat().st_size for rel in tracked)
         self.assertLessEqual(size, MAX_BYTES)
+
+
+class DshBundleTest(unittest.TestCase):
+    """Контракт bundle для DeepSeek Harness: корневой npm-пакет и его cordis.patch.yml."""
+
+    def test_bundle_manifest(self) -> None:
+        data = load(DSH_PACKAGE)
+        self.assertEqual(data["name"], NAME)
+        self.assertEqual(data["version"], VERSION)
+        self.assertEqual(data["description"], SHORT)
+        self.assertEqual(data["type"], "module")
+        self.assertEqual(data["main"], DSH_PLUGIN)
+        self.assertEqual(
+            data["exports"],
+            {
+                ".": f"./{DSH_PLUGIN}",
+                "./locale/*.json": "./locale/*.json",
+                "./icon": f"./{DSH_ICON}",
+            },
+        )
+        self.assertEqual(data["dsh"], {"bundle": {"patch": f"./{DSH_PATCH}"}})
+        self.assertEqual(data["license"], "MIT")
+        self.assertEqual(data.get("icon"), None)
+        self.assertTrue({DSH_PLUGIN, DSH_PATCH, DSH_ICON, "locale/*.json", "skills"} <= set(data["files"]))
+        self.assertNotIn("dependencies", data)
+        self.assertNotIn("peerDependencies", data)
+        for rel in DSH_FILES:
+            with self.subTest(file=rel):
+                self.assertTrue((ROOT / rel).is_file(), f"{rel} is missing")
+
+    def test_patch_points_at_the_mcp_server(self) -> None:
+        text = (ROOT / DSH_PATCH).read_text(encoding="utf-8")
+        self.assertIn("@deepseek-ai/dsh-mcp-client", text)
+        self.assertIn(f"serverName: {MCP_NAME}", text)
+        self.assertIn(MCP_URL, text)
+        self.assertIn(f"process.env.{DSH_TOKEN_ENV}", text)
+        self.assertIn("failOnStartupError: true", text)
+        self.assertIn(f"name: '{NAME}'", text)
+        self.assertEqual(LITERAL_SECRET.findall(text), [], "patch must not carry a literal credential")
+
+    @unittest.skipIf(yaml is None, "PyYAML is not installed; the CI job installs it")
+    def test_patch_structure(self) -> None:
+        class Loader(yaml.SafeLoader):
+            pass
+
+        Loader.add_constructor("tag:yaml.org,2002:js", lambda loader, node: loader.construct_scalar(node))
+        patch = yaml.load((ROOT / DSH_PATCH).read_text(encoding="utf-8"), Loader=Loader)
+        self.assertIsInstance(patch, list)
+        self.assertEqual(len(patch), 1)
+        self.assertEqual(set(patch[0]), {"insert"})
+        rows = {row["id"]: row for row in patch[0]["insert"]}
+        self.assertEqual(set(rows), DSH_ROW_IDS)
+
+        mcp = rows["mcp-rosstat-staging"]
+        self.assertEqual(mcp["name"], "@deepseek-ai/dsh-mcp-client")
+        config = mcp["config"]
+        self.assertEqual(config["serverName"], MCP_NAME)
+        self.assertEqual(config["transport"], "streamable-http")
+        self.assertEqual(config["url"], MCP_URL)
+        self.assertIs(config["failOnStartupError"], True)
+        self.assertEqual(config["headers"], {"Authorization": DSH_HEADER})
+
+        skill = rows["skill-rosstat-sql"]
+        self.assertEqual(skill["name"], NAME)
+        self.assertNotIn("config", skill)
+
+    def test_locales_and_icon(self) -> None:
+        for rel in DSH_LOCALES:
+            with self.subTest(file=rel):
+                meta = load(rel)["meta"]
+                self.assertTrue(meta["title"].strip())
+                self.assertTrue(meta["description"].strip())
+                self.assertLessEqual(len(meta["description"]), 300)
+        icon = ROOT / DSH_ICON
+        self.assertLessEqual(icon.stat().st_size, 256 * 1024)
+        root = ET.fromstring(icon.read_text(encoding="utf-8"))
+        self.assertTrue(root.tag.endswith("svg"))
+        self.assertTrue(root.get("viewBox"))
+
+    def test_host_plugin_registers_skill(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is required for the DeepSeek Harness host half")
+        description = frontmatter((ROOT / SKILL_REL).read_text(encoding="utf-8"))["description"]
+        script = (
+            """
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const root = __ROOT__;
+const mod = await import(pathToFileURL(root + "/" + __PLUGIN__).href);
+assert.deepEqual(mod.inject, ["skills"]);
+let provider;
+const ctx = { skills: { registerProvider(create) { provider = create({ signal: new AbortController().signal, invalidate() {} }); } } };
+mod.apply(ctx);
+const candidates = await provider.list({ cwd: root });
+assert.equal(candidates.length, 1);
+const candidate = candidates[0];
+assert.equal(candidate.name, "rosstat-sql");
+assert.equal(candidate.description, __DESCRIPTION__);
+assert.equal(candidate.provider, "rosstat-mcp");
+assert.equal(candidate.source, "bundled");
+assert.equal(candidate.rank, 600);
+const definition = await provider.get(candidate);
+assert.equal(definition.name, candidate.name);
+assert.equal(definition.description, candidate.description);
+assert.ok(definition.content.startsWith("# Answering with Rosstat/CBR data"));
+assert.ok(definition.content.includes("references/templates.md"));
+assert.ok(definition.resourceBase.path.endsWith("skills/rosstat-sql"));
+"""
+        )
+        script = (
+            script.replace("__ROOT__", json.dumps(str(ROOT)))
+            .replace("__PLUGIN__", json.dumps(DSH_PLUGIN))
+            .replace("__DESCRIPTION__", json.dumps(description))
+        )
+        result = subprocess.run(
+            [node, "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
 
 if __name__ == "__main__":
