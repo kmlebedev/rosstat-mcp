@@ -18,5 +18,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Структурная проверка cordis.patch.yml bundle-а DSH; сами тесты на stdlib.
+      - name: Install test dependencies
+        run: python3 -m pip install PyYAML==6.0.2
+
       - name: Test manifests
         run: python3 -m unittest discover -s tests -v
