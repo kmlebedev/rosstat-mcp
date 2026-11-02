@@ -36,18 +36,6 @@ claude mcp list
 
 Ожидается строка `plugin:rosstat-mcp:rosstat-staging: https://mcp.selfinvesting.ru:8443/mcp (HTTP) - ✔ Connected`. Без токена или с неверным токеном сервер отвечает 401.
 
-## Миграция с плагина `clickhouse-import-rosstat`
-
-До версии 0.3.0 плагин публиковался из корня репозитория `clickhouse-import-rosstat` вместе с ролевыми скилами, и установка скачивала весь проект (~200 МБ). Тот маркетплейс больше не обновляется. Удалите старую установку и поставьте `rosstat-mcp` по таблице выше:
-
-| Клиент | Удаление |
-|---|---|
-| Claude Code | `claude plugin marketplace remove clickhouse-import-rosstat` |
-| Codex | `codex plugin marketplace remove clickhouse-import-rosstat` |
-| Kimi Code | `/plugins remove clickhouse-import-rosstat` |
-| Qwen Code | `qwen extensions uninstall clickhouse-import-rosstat` |
-| Cursor | удалить плагин `clickhouse-import-rosstat` в настройках плагинов |
-
 ## Разработка
 
 Контракт манифестов (имена, версии, описания, MCP-сервер, отсутствие секретов, состав репозитория) и скила (один скил, `description` ≤ 300 символов, `SKILL.md` ≤ 6 КБ и весь скил с `references/` ≤ 10 КБ, в SQL-примерах только `v_*` и `system.*`) проверяет `tests/test_manifests.py`:
