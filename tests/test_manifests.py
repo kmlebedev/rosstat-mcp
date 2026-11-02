@@ -58,6 +58,7 @@ TRACKED_FILES = {
     "skills/rosstat-sql/SKILL.md",
     "skills/rosstat-sql/references/templates.md",
     "skills/rosstat-sql/references/point-in-time.md",
+    "wiki/rosstat-mcp.md",
 }
 MAX_BYTES = 65536
 
