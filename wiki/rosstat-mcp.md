@@ -1,6 +1,6 @@
 # rosstat-mcp: доступ ИИ-агентов к российской макростатистике
 
-`rosstat-mcp` — плагин для Claude Code, Codex, Cursor, Kimi Code и Qwen Code, который подключает ИИ-агента к данным проекта [clickhouse-import-rosstat](https://github.com/kmlebedev/clickhouse-import-rosstat) через Model Context Protocol (MCP). Агент получает доступ к каталогу показателей и read-only витринам staging-ClickHouse: макро- и финансовым рядам Росстата, Банка России, Минфина и MOEX.
+`rosstat-mcp` — плагин для Claude Code, Codex, Cursor, Kimi Code, Qwen Code и DeepSeek Harness, который подключает ИИ-агента к данным проекта [clickhouse-import-rosstat](https://github.com/kmlebedev/clickhouse-import-rosstat) через Model Context Protocol (MCP). Агент получает доступ к каталогу показателей и read-only витринам staging-ClickHouse: макро- и финансовым рядам Росстата, Банка России, Минфина и MOEX.
 
 Плагин решает две задачи. MCP-сервер `rosstat-staging` передаёт агенту результаты запросов к данным, а скил `rosstat-sql` объясняет, как выбрать правильный ряд и написать корректный запрос. В составе нет агентов, команд и хуков.
 
@@ -34,6 +34,8 @@
 
 При первом подключении клиент открывает браузер; войдите Google-аккаунтом из allowlist. Kimi Code 2.2.0+: `/mcp` или `/mcp-config login <server>`, если браузер не открылся сам. Claude Code и Cursor поддерживают OAuth для remote MCP; Codex и Qwen Code — только в версиях клиента с OAuth (`codex mcp login ...` или аналог). Если клиент не умеет OAuth, он получит `401` и не подключится.
 
+Исключение — DeepSeek Harness: его встроенный MCP-клиент (DSH 0.2.x) не поддерживает MCP OAuth. Поэтому DSH-bundle передаёт `ROSSTAT_MCP_TOKEN` в заголовке `Authorization` — как манифесты 0.4.x. Это переходный режим: он работает, пока staging принимает статический bearer-токен; после OAuth-cutover строку MCP в bundle нужно перевести на OAuth.
+
 Плагин 0.4.x с `ROSSTAT_MCP_TOKEN` больше не работает: сервер переведён на OAuth (cutover на `:8443`). Нужна версия 0.5.0+.
 
 ### Команды установки
@@ -45,6 +47,7 @@
 | Kimi Code | `/plugins install https://github.com/kmlebedev/rosstat-mcp` |
 | Qwen Code | `qwen extensions install kmlebedev/rosstat-mcp` |
 | Cursor | `/add-plugin https://github.com/kmlebedev/rosstat-mcp` |
+| DeepSeek Harness | В Plugins установить bundle `github:kmlebedev/rosstat-mcp`; нужен `ROSSTAT_MCP_TOKEN` (см. ниже) |
 
 После установки начните новую сессию или выполните `/reload`. Для Claude Code подключение проверяется командой:
 
@@ -59,7 +62,22 @@ claude mcp list
 При работе с `rosstat-staging` агент подхватывает `rosstat-sql` автоматически. Явный вызов:
 
 - Claude Code и Qwen Code: `/rosstat-mcp:rosstat-sql`;
-- Codex, Cursor и Kimi Code: по имени `rosstat-sql`.
+- Codex, Cursor и Kimi Code: по имени `rosstat-sql`;
+- DeepSeek Harness: по имени `rosstat-sql` в каталоге скилов (bundle регистрирует его host half-плагином).
+
+## DeepSeek Harness
+
+DSH ставит плагин как bundle: корневой `package.json` объявляет `dsh.bundle.patch`, а `cordis.patch.yml` добавляет MCP-строку `rosstat-staging` и host half `index.js`, регистрирующий скил `rosstat-sql`. Установка — в Web GUI (Plugins) или инструментом агента: `plugin_manager` → `install_bundle`, цель `github:kmlebedev/rosstat-mcp`.
+
+DSH 0.2.x не умеет MCP OAuth, поэтому до установки задайте токен — в окружении процесса DSH или в `~/.dsh/.env` — и перезапустите DSH:
+
+```bash
+export ROSSTAT_MCP_TOKEN=<токен>
+```
+
+Loader подставляет значение в `Authorization` через `!!js`; в манифесте токена нет. Без токена MCP-строка не активируется (`failOnStartupError: true`), но скил остаётся доступен. После установки в Plugins видны строки `rosstat-staging` и `Rosstat MCP`, а агент получает инструменты `mcp__rosstat-staging__*`.
+
+Это переходное решение: после OAuth-cutover блок `headers` из `cordis.patch.yml` убирается, когда DSH научится MCP OAuth; иначе используется stdio-мост `npx -y mcp-remote@0.16.0 <url>`. Оба варианта меняют только `cordis.patch.yml`.
 
 ## Доступные данные и границы доступа
 
@@ -200,13 +218,16 @@ Point-in-time слой включает:
 
 ## Разработка репозитория
 
-Для каждого клиента в репозитории хранится собственный манифест, а общие правила SQL — в `skills/rosstat-sql/`. Тесты проверяют:
+Для каждого клиента в репозитории хранится собственный манифест, а общие правила SQL — в `skills/rosstat-sql/`. DeepSeek Harness получает bundle: корневой `package.json`, `cordis.patch.yml`, host half `index.js`, локали и иконку. Тесты проверяют:
 
 - имена, версии и описания плагина;
 - единственный MCP-сервер `rosstat-staging` и его HTTP-адрес;
 - отсутствие агентов, команд и хуков;
 - отсутствие токенов, `headers` и `variables`; у Kimi Code — `auth: "oauth"`;
 - отсутствие секретов и токенов в URL;
+- состав bundle DSH: манифест, патч, host half, локали и иконку;
+- структуру `cordis.patch.yml` (при установленном PyYAML) и отсутствие литеральных секретов в нём;
+- регистрацию скила `rosstat-sql` host half-плагином (проверка на Node.js);
 - наличие только одного скила `rosstat-sql`;
 - ссылки скилов на обе справки и использование в SQL только `v_*` и `system.*`;
 - состав отслеживаемых файлов и их общий размер.
@@ -217,7 +238,7 @@ Point-in-time слой включает:
 python3 -m unittest discover -s tests -v
 ```
 
-Тот же набор выполняется в CI для каждого push и pull request. Сеть для тестов не нужна, используется только стандартная библиотека Python.
+Тот же набор выполняется в CI для каждого push и pull request. Сеть для тестов не нужна, используется только стандартная библиотека Python; CI дополнительно ставит PyYAML для структурной проверки `cordis.patch.yml`.
 
 Для скила действуют ограничения: `description` не длиннее 300 символов, `SKILL.md` не больше 6144 байт, весь скил вместе с `references/` не больше 10240 байт. SQL-примеры перед слиянием прогоняются на staging через MCP. Новый файл основного репозитория добавляется в `TRACKED_FILES` в `tests/test_manifests.py`, поскольку при установке содержимое репозитория передаётся пользователю.
 
@@ -229,6 +250,7 @@ python3 -m unittest discover -s tests -v
 
 - [README rosstat-mcp](https://github.com/kmlebedev/rosstat-mcp/blob/main/README.md) — назначение, установка и разработка.
 - Манифесты клиентов: [Claude Code](https://github.com/kmlebedev/rosstat-mcp/blob/main/.claude-plugin/plugin.json), [Codex](https://github.com/kmlebedev/rosstat-mcp/blob/main/.codex-plugin/plugin.json), [Cursor](https://github.com/kmlebedev/rosstat-mcp/blob/main/.cursor-plugin/plugin.json), [Kimi Code](https://github.com/kmlebedev/rosstat-mcp/blob/main/kimi.plugin.json), [Qwen Code](https://github.com/kmlebedev/rosstat-mcp/blob/main/qwen-extension.json).
+- Bundle DeepSeek Harness: [package.json](https://github.com/kmlebedev/rosstat-mcp/blob/main/package.json), [cordis.patch.yml](https://github.com/kmlebedev/rosstat-mcp/blob/main/cordis.patch.yml), [host half](https://github.com/kmlebedev/rosstat-mcp/blob/main/index.js).
 - [Скил rosstat-sql](https://github.com/kmlebedev/rosstat-mcp/blob/main/skills/rosstat-sql/SKILL.md) — рабочий процесс, доступ и правила запросов.
 - [SQL-шаблоны](https://github.com/kmlebedev/rosstat-mcp/blob/main/skills/rosstat-sql/references/templates.md) — поиск витрин, последние значения, годовые и месячные расчёты.
 - [Point-in-time справка](https://github.com/kmlebedev/rosstat-mcp/blob/main/skills/rosstat-sql/references/point-in-time.md) — винтажи, строгое условие `as_of` и покрытие.

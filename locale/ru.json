@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Rosstat MCP",
+    "description": "Подключает read-only MCP-сервер rosstat-staging к витринам Росстата и ЦБ и добавляет скил rosstat-sql."
+  }
+}
