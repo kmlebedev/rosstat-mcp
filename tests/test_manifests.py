@@ -53,6 +53,7 @@ TRACKED_FILES = {
     "README.md",
     "LICENSE",
     ".gitignore",
+    "mkdocs.yml",
     "tests/test_manifests.py",
     ".github/workflows/check.yml",
     ".github/workflows/pages.yml",

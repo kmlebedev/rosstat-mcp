@@ -2,55 +2,47 @@ name: Pages
 
 on:
   push:
-    branches:
-      - pages
+    branches: [pages]
     paths:
-      - wiki/**
-      - .github/workflows/pages.yml
+      - "wiki/**"
+      - "mkdocs.yml"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "wiki/**"
+      - "mkdocs.yml"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install mkdocs-material==9.7.7
       - name: Prepare site
         run: |
           mkdir -p .pages-site
-          printf '%s\n' 'title: rosstat-mcp' 'theme: minima' > .pages-site/_config.yml
-          {
-            printf -- '---\nlayout: default\ntitle: rosstat-mcp\n---\n\n'
-            cat wiki/rosstat-mcp.md
-          } > .pages-site/index.md
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Build with Jekyll
-        uses: actions/jekyll-build-pages@v1
+          cp wiki/rosstat-mcp.md .pages-site/index.md
+      - run: mkdocs build --strict
+      - uses: actions/upload-pages-artifact@v4
         with:
-          source: ./.pages-site
-          destination: ./_site
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: ./_site
+          path: _site
 
   deploy:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     needs: build
+    runs-on: ubuntu-latest
     permissions:
       pages: write
       id-token: write
@@ -58,6 +50,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
+      - id: deployment
         uses: actions/deploy-pages@v4
