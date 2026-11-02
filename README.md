@@ -6,15 +6,13 @@
 
 Вместе с MCP плагин ставит один скил — `rosstat-sql`: как найти ряд в `v_series_catalog`, как писать дешёвые и корректные запросы ClickHouse к витринам (последнее значение, г/г по цепным индексам, агрегаты по месяцам, срез `v_point_in_time_asof`) и какие ловушки есть в данных. Агент подхватывает скил сам, когда пишет SQL к `rosstat-staging`; явно — `/rosstat-mcp:rosstat-sql` в Claude Code и Qwen Code, по имени `rosstat-sql` в остальных клиентах. Скил написан по-английски ради экономии токенов, отвечает агент по-русски. Агентов, команд и хуков в плагине нет.
 
-## Токен
+## Доступ
 
-Токен выдаёт владелец репозитория. Положите его в переменную окружения `ROSSTAT_MCP_TOKEN` до запуска клиента:
+Доступ выдаёт владелец: он добавляет Google-адрес в allowlist `ROSSTAT_MCP_ALLOWED_GOOGLE_EMAILS` на сервере. Токен не нужен и не принимается: сервер авторизует через Google OAuth, а аккаунт не из allowlist получает отказ. В манифестах нет ни токена, ни `headers` — только URL и (для Kimi Code) `auth: "oauth"`.
 
-```bash
-export ROSSTAT_MCP_TOKEN=<токен>
-```
+При первом подключении клиент открывает браузер и просит войти Google-аккаунтом. Kimi Code 2.2.0+: команда `/mcp` или `/mcp-config login <server>`, если браузер не открылся сам. Claude Code и Cursor поддерживают OAuth для remote MCP; Codex и Qwen Code — только в версиях клиента с OAuth (`codex mcp login ...` или аналог). Если клиент не умеет OAuth, он получит `401` и не подключится.
 
-В Cursor токен задаётся переменной плагина `ROSSTAT_MCP_TOKEN` (Plugins → Configure). В манифестах токена нет — только ссылка на переменную.
+Версии плагина 0.4.x с `ROSSTAT_MCP_TOKEN` больше не работают: сервер переведён на OAuth (cutover на `:8443`). Нужна версия 0.5.0+.
 
 ## Установка
 
@@ -34,11 +32,11 @@ export ROSSTAT_MCP_TOKEN=<токен>
 claude mcp list
 ```
 
-Ожидается строка `plugin:rosstat-mcp:rosstat-staging: https://mcp.selfinvesting.ru:8443/mcp (HTTP) - ✔ Connected`. Без токена или с неверным токеном сервер отвечает 401.
+До входа ожидается `Needs authentication` или `401`; после Google-входа — `Connected`. В Kimi Code: `/mcp`, вход Google, затем запрос `run_query` (например, `max(date)` из `v_cbr_macro`). Если сервер отвечает `401` после входа — проверьте, что email добавлен в `ROSSTAT_MCP_ALLOWED_GOOGLE_EMAILS`, и перезапустите сессию.
 
 ## Разработка
 
-Контракт манифестов (имена, версии, описания, MCP-сервер, отсутствие секретов, состав репозитория) и скила (один скил, `description` ≤ 300 символов, `SKILL.md` ≤ 6 КБ и весь скил с `references/` ≤ 10 КБ, в SQL-примерах только `v_*` и `system.*`) проверяет `tests/test_manifests.py`:
+Контракт манифестов (имена, версии, описания, MCP-сервер, отсутствие секретов и токенов, состав репозитория) и скила (один скил, `description` ≤ 300 символов, `SKILL.md` ≤ 6 КБ и весь скил с `references/` ≤ 10 КБ, в SQL-примерах только `v_*` и `system.*`) проверяет `tests/test_manifests.py`:
 
 ```bash
 python3 -m unittest discover -s tests -v
