@@ -1,16 +1,13 @@
 {
   "name": "rosstat-mcp",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) on the clickhouse-import-rosstat staging server, plus the rosstat-sql skill for writing efficient ClickHouse queries against them.",
   "author": "kmlebedev",
   "license": "MIT",
   "homepage": "https://github.com/kmlebedev/rosstat-mcp",
   "mcpServers": {
     "rosstat-staging": {
-      "httpUrl": "https://mcp.selfinvesting.ru:8443/mcp",
-      "headers": {
-        "Authorization": "Bearer ${ROSSTAT_MCP_TOKEN}"
-      }
+      "httpUrl": "https://mcp.selfinvesting.ru:8443/mcp"
     }
   }
 }
