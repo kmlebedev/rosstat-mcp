@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 NAME = "rosstat-mcp"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 LONG = (
     "Read-only MCP connection to Rosstat/CBR data marts (v_* views, point-in-time layer) "
     "on the clickhouse-import-rosstat staging server, plus the rosstat-sql skill for writing "
@@ -29,8 +29,7 @@ SHORT = "Read-only MCP to Rosstat/CBR data marts + SQL skill"
 
 MCP_NAME = "rosstat-staging"
 MCP_URL = "https://mcp.selfinvesting.ru:8443/mcp"
-TOKEN_ENV = "ROSSTAT_MCP_TOKEN"
-BEARER = "Bearer ${" + TOKEN_ENV + "}"
+AUTH_VALUE = "oauth"
 REPO_GIT = "https://github.com/kmlebedev/rosstat-mcp.git"
 
 PLUGIN_MANIFESTS = (
@@ -80,26 +79,23 @@ SKILLS_DECLARED = {".codex-plugin/plugin.json", "kimi.plugin.json"}
 SKILLS_PATH = "./skills/"
 FORBIDDEN_KEY = re.compile(r"(?i)(api[_-]?key|token|password|secret|bearer|cookie|credential)")
 TOKEN_REF_KEYS = {"bearerTokenEnvVar", "bearer_token_env_var"}
-# Описание плагинной переменной Cursor: только метаданные, без значения.
-TOKEN_VARIABLE_KEYS = {"type", "title", "description"}
+# OAuth не требует ни статических заголовков, ни плагинных переменных.
+BLOCKED_KEYS = {"headers", "variables"}
 
 
 def secret_problems(rel: str, value: object, path: str = "") -> list[str]:
-    """Нарушения правила «токен только ссылкой на ROSSTAT_MCP_TOKEN»."""
+    """Нарушения правила «только OAuth, без токенов и статических headers»."""
     problems: list[str] = []
     if isinstance(value, dict):
         for key, child in value.items():
             here = f"{path}.{key}" if path else key
             if key in TOKEN_REF_KEYS:
-                if child != TOKEN_ENV:
-                    problems.append(f"{rel}: {here} must name {TOKEN_ENV}")
-            elif key == "headers":
-                if child != {"Authorization": BEARER}:
-                    problems.append(f"{rel}: {here} must be exactly Authorization: {BEARER}")
-            elif key == TOKEN_ENV:
-                allowed = rel == ".cursor-plugin/plugin.json" and here == f"variables.properties.{TOKEN_ENV}"
-                if not allowed or not isinstance(child, dict) or not set(child) <= TOKEN_VARIABLE_KEYS:
-                    problems.append(f"{rel}: {here} may only describe the Cursor variable")
+                problems.append(f"{rel}: {here} is a legacy token reference; use auth: oauth")
+            elif key in BLOCKED_KEYS:
+                problems.append(f"{rel}: {here} is not allowed; OAuth needs no headers/variables")
+            elif key == "auth":
+                if child != AUTH_VALUE:
+                    problems.append(f"{rel}: {here} must be {AUTH_VALUE!r}")
             elif FORBIDDEN_KEY.search(key):
                 problems.append(f"{rel}: forbidden key {here!r}")
             else:
@@ -222,16 +218,15 @@ class ManifestTest(unittest.TestCase):
                 self.assertEqual(set(servers), {MCP_NAME})
                 server = servers[MCP_NAME]
                 self.assertEqual(server.get("url") or server.get("httpUrl"), MCP_URL)
-                auth = (
-                    server.get("headers", {}).get("Authorization") == BEARER
-                    or server.get("bearerTokenEnvVar") == TOKEN_ENV
-                    or server.get("bearer_token_env_var") == TOKEN_ENV
-                )
-                self.assertTrue(auth, f"{rel}: token must come from {TOKEN_ENV}")
+                self.assertNotIn("headers", server)
+                self.assertNotIn("bearerTokenEnvVar", server)
+                self.assertNotIn("bearer_token_env_var", server)
+                if rel == "kimi.plugin.json":
+                    self.assertEqual(server.get("auth"), AUTH_VALUE)
+                else:
+                    self.assertNotIn("auth", server)
 
-        variables = load(".cursor-plugin/plugin.json")["variables"]
-        self.assertIn(TOKEN_ENV, variables["properties"])
-        self.assertIn(TOKEN_ENV, variables["required"])
+        self.assertNotIn("variables", load(".cursor-plugin/plugin.json"))
 
     def test_no_secrets(self) -> None:
         for path in sorted(ROOT.rglob("*.json")):
@@ -253,12 +248,13 @@ class ManifestTest(unittest.TestCase):
             return data
 
         cases = {
-            "variable default": (".cursor-plugin/plugin.json", "variables.properties.ROSSTAT_MCP_TOKEN.default", "FAKEVALUE123"),
-            "env value": ("qwen-extension.json", "mcpServers.rosstat-staging.env", {TOKEN_ENV: "FAKEVALUE123"}),
-            "extra header": ("qwen-extension.json", "mcpServers.rosstat-staging.headers.X-Auth", "bearer FAKEVALUE123"),
-            "token scheme": (".claude-plugin/plugin.json", "mcpServers.rosstat-staging.headers.Authorization", "Token abc"),
+            "bearer env var": ("kimi.plugin.json", "mcpServers.rosstat-staging.bearerTokenEnvVar", "ROSSTAT_MCP_TOKEN"),
+            "header": ("qwen-extension.json", "mcpServers.rosstat-staging.headers", {"Authorization": "Bearer FAKE"}),
+            "env token": ("qwen-extension.json", "mcpServers.rosstat-staging.env", {"ROSSTAT_MCP_TOKEN": "FAKE"}),
             "query token": ("kimi.plugin.json", "mcpServers.rosstat-staging.url", MCP_URL + "?token=abc"),
             "credential key": ("kimi.plugin.json", "mcpServers.rosstat-staging.credential", "abc"),
+            "auth basic": ("kimi.plugin.json", "mcpServers.rosstat-staging.auth", "basic"),
+            "cursor variables": (".cursor-plugin/plugin.json", "variables", {"type": "object"}),
         }
         for name, (rel, path, value) in cases.items():
             with self.subTest(case=name):
